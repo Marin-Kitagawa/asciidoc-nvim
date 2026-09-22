@@ -1,0 +1,3 @@
+= Second Document
+
+Just some content.
