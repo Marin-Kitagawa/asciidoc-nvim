@@ -1,0 +1,303 @@
+= asciidoc-nvim
+:source-highlighter: highlight.js
+:toc: left
+:toclevels: 3
+:icons: font
+
+Live AsciiDoc preview for Neovim, rendered with the `asciidoctor` CLI into a
+browser tab.
+
+The plugin supports two preview modes:
+
+[options="header"]
+|===
+| Mode | Description
+| `live` (default) | Re-renders as you type and auto-reloads the browser
+| `save` | Re-renders only when the file is written
+|===
+
+Modes are per-buffer, so you can run a live preview in one buffer and an
+on-save preview in another.
+
+.Highlights
+* Zero extra runtime dependencies: needs only Neovim `>= 0.10` and the `asciidoctor` CLI.
+* Renders from the real file on disk, so `include::[]`, images and other
+  file-relative resources resolve correctly.
+* Auto-injects a `<meta http-equiv="refresh">` tag into the generated page so
+  the browser reloads the preview without any web server.
+* Per-buffer state: previews, timers and temp files are cleaned up when the
+  buffer is wiped or `:AsciidocPreviewClose` is called.
+
+== Requirements
+
+* Neovim `>= 0.10` (uses `vim.system`, `vim.schedule`, `vim.uv`)
+* The https://asciidoctor.org[asciidoctor] command-line tool on `PATH`
+
+On Windows, asciidoctor is commonly installed as a Ruby gem:
+
+[source,sh]
+----
+gem install asciidoctor
+----
+
+Verify the binary is reachable:
+
+[source,sh]
+----
+asciidoctor --version
+----
+
+== Installation
+
+=== lazy.nvim
+
+[source,lua]
+----
+{
+  "Marin-Kitagawa/asciidoc-nvim",
+  ft = "asciidoc",
+  config = function()
+    require("asciidoc").setup({})
+  end,
+}
+----
+
+=== AstroNvim
+
+Create `lua/plugins/asciidoc.lua` inside your config (AstroNvim v4 user
+plugins directory):
+
+[source,lua]
+----
+return {
+  {
+    "Marin-Kitagawa/asciidoc-nvim",
+    ft = "asciidoc",
+    config = function()
+      require("asciidoc").setup({})
+    end,
+  },
+}
+----
+
+then restart Neovim (lazy.nvim installs the new spec automatically) or run
+`:Lazy install`.
+
+=== packer.nvim
+
+[source,lua]
+----
+use {
+  "Marin-Kitagawa/asciidoc-nvim",
+  ft = "asciidoc",
+  config = function()
+    require("asciidoc").setup({})
+  end,
+}
+----
+
+=== vim-plug
+
+[source,vim]
+----
+Plug 'Marin-Kitagawa/asciidoc-nvim'
+
+augroup asciidoc_nvim_init
+  autocmd!
+  autocmd FileType asciidoc lua require("asciidoc").setup({})
+augroup END
+----
+
+== Usage
+
+Open an AsciiDoc file (extension `.adoc`, `.asciidoc` or `.ad`, or a buffer
+with `filetype=asciidoc`) and run:
+
+[options="header"]
+|===
+| Command | Action
+| `:AsciidocPreview` | Render the buffer and open the preview in your browser
+| `:AsciidocPreviewToggle` | Switch between live preview and preview-on-save
+| `:AsciidocPreviewMode live` | Force live preview mode
+| `:AsciidocPreviewMode save` | Force preview-on-save mode
+| `:AsciidocPreviewStatus` | Show the current buffer's preview status
+| `:AsciidocPreviewClose` | Stop previewing and delete the temporary HTML
+|===
+
+.Recommended keymaps
+[source,lua]
+----
+vim.keymap.set("n", "<leader>ap", ":AsciidocPreview<CR>")
+vim.keymap.set("n", "<leader>at", ":AsciidocPreviewToggle<CR>")
+vim.keymap.set("n", "<leader>ac", ":AsciidocPreviewClose<CR>")
+----
+
+=== Lua API
+
+All commands are thin wrappers around the public API:
+
+[source,lua]
+----
+local asciidoc = require("asciidoc")
+
+asciidoc.preview()        -- open/reopen the preview for the current buffer
+asciidoc.toggle_live()    -- toggle live <-> on-save mode
+asciidoc.set_mode("save") -- force a mode: "live" or "save"
+asciidoc.status()         -- print status for the current buffer
+asciidoc.close()          -- stop the preview and clean up temp files
+asciidoc.setup({})        -- configure defaults
+asciidoc.version          -- plugin version string
+----
+
+Each function accepts an optional buffer number:
+
+[source,lua]
+----
+asciidoc.preview(42) -- preview buffer 42
+asciidoc.set_mode("live", 42)
+----
+
+== How it works
+
+. Commands/Autocommands schedule a (debounced) render for the buffer.
+. `render` writes the buffer to disk first (live mode only, controlled by
+  `write_on_change`), then shells out to:
++
+[source,sh]
+----
+asciidoctor -b html5 -o <cache>/asciidoc-nvim/preview-<bufnr>.html <file>
+----
++
+. On success the plugin injects a `<meta http-equiv="refresh" content="N">`
+  tag after `<head>` (when `refresh > 0`) and opens the HTML in your default
+  browser via `vim.ui.open`.
+. The meta refresh makes the browser automatically reload `N` seconds, giving
+  the preview its live feel without a web server.
+
+[NOTE]
+====
+Because the preview is rendered from the *file on disk*, in live mode the
+plugin writes the buffer with `:update` before each render so the preview
+always reflects your current editing. This happens after the debounce delay
+and only while a preview is active for the buffer. Set `write_on_change =
+false` if you do not want the plugin to write the buffer.
+====
+
+=== Events per mode
+
+[options="header"]
+|===
+| Mode | Events that trigger a render
+| `live` | `TextChanged` , `TextChangedI` , `InsertLeave` , `BufWritePost`
+| `save` | `BufWritePost`
+|===
+
+Renders are debounced (`debounce_ms`, default `300`) and skipped while a
+previous render is still running to avoid piling up `asciidoctor` jobs.
+
+=== Temp files
+
+Rendered HTML lives in `stdpath("cache") .. "/asciidoc-nvim"` (override with
+`out_dir`) and is removed when you run `:AsciidocPreviewClose` or wipe the
+buffer.
+
+== Configuration
+
+`require("asciidoc").setup()` merges your options over the defaults:
+
+[source,lua]
+----
+require("asciidoc").setup({
+  auto_preview = false,        -- open the preview when ft=asciidoc is entered
+  executable = "asciidoctor",  -- asciidoctor binary / path
+  backend = "html5",           -- asciidoctor backend: html5, xhtml5, htmlbook, ...
+  live = true,                 -- default preview mode for new buffers
+  debounce_ms = 300,           -- debounce between live re-renders (ms)
+  refresh = 1,                 -- browser auto-reload interval (s); 0 disables
+  write_on_change = true,      -- write the buffer before rendering in live mode
+  out_dir = nil,               -- output dir for the rendered HTML
+  max_file_size_kb = 2048,     -- skip rendering files larger than this
+})
+----
+
+[options="header"]
+|===
+| Option | Default | Description
+| `auto_preview` | `false` | Start a preview automatically when a buffer with `filetype=asciidoc` is entered
+| `executable` | `asciidoctor` | Command (or absolute path) used to render. Useful if asciidoctor isn't on `PATH`
+| `backend` | `html5` | Asciidoctor backend passed via `-b`
+| `live` | `true` | Default mode for new previews (`live` or `save`)
+| `debounce_ms` | `300` | Minimum delay between live re-renders, in milliseconds
+| `refresh` | `1` | Interval (seconds) of the injected auto-reload meta tag; set to `0` or `false` to disable browser auto-reload
+| `write_on_change` | `true` | Write the buffer to disk before each live render so the preview reflects unsaved edits
+| `out_dir` | *cache* | Directory for the rendered HTML; defaults to `stdpath("cache") .. "/asciidoc-nvim"`
+| `max_file_size_kb` | `2048` | Files larger than this are skipped (avoids hammering `asciidoctor` with huge documents)
+|===
+
+=== Auto-preview
+
+If you want an `:AsciidocPreview` every time you open an AsciiDoc file:
+
+[source,lua]
+----
+require("asciidoc").setup({ auto_preview = true })
+----
+
+== Using a custom asciidoctor path
+
+If the binary is not on `PATH` (or you want a specific install):
+
+[source,lua]
+----
+require("asciidoc").setup({
+  executable = "C:/Software/Ruby40-x64/bin/asciidoctor.bat",
+})
+----
+
+== Requirements for a custom backend
+
+Any backend that produces HTML with a `<head>` element works with the auto
+reload injection, e.g. `html5`, `xhtml5`, `htmlbook` or
+`manpage`-style outputs. Non-HTML backends (e.g. `pdf`) are not supported by
+the preview.
+
+== Troubleshooting
+
+`asciidoc-nvim: <exe> failed:` on error notification::
+  The asciidoctor invocation exited non-zero. The captured stderr is shown in
+  the notification. Common causes: the document uses an unknown attribute,
+  a missing `include::` target, or the executable path is wrong.
+
+No preview opens in the browser::
+  Make sure `vim.ui.open` is available (Neovim `>= 0.10`). On older versions
+  the plugin falls back to `xdg-open` (Linux), `open` (macOS) or
+  `cmd /c start` (Windows).
+
+The browser does not reload after edits::
+  The refresh meta tag is only injected when `refresh > 0` and the generated
+  HTML contains a `<head>`. Note that some browsers throttle meta-refresh for
+  background tabs; keep the preview tab focused.
+
+The preview shows stale content::
+  In `save` mode the plugin renders on `BufWritePost` only. Switch to live
+  mode with `:AsciidocPreviewToggle` if you want changes reflected without
+  saving.
+
+== Testing
+
+The plugin ships a headless test harness (`test/preview_test.lua`) that
+exercises the full pipeline against a real `asciidoctor` install:
+
+[source,sh]
+----
+nvim --headless -u NONE --cmd "set loadplugins" --cmd "set runtimepath^=." -l test/preview_test.lua
+----
+
+The test renders a fixture, asserts the refresh meta injection, verifies that
+live mode re-renders on text edits while save mode does not, checks that mode
+toggling and `write_on_change` behave, and confirms temp files are removed by
+`:AsciidocPreviewClose` and buffer wipe.
+
+== License
+
+MIT. See https://github.com/Marin-Kitagawa/asciidoc-nvim/blob/main/LICENSE[LICENSE].
